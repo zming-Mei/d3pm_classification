@@ -44,41 +44,27 @@ class LabelDiffusion(nn.Module):
             nn.Linear(256, num_classes)
         ).to(device)
 
-    def generate_transition_matrix(self, t):
-        """生成时间步 t 的类别转移矩阵 Q_t"""
-        Q_t = torch.zeros((self.num_classes, self.num_classes), device=self.device)
-        for i in range(self.num_classes):
-            probs = torch.ones(self.num_classes, device=self.device) / self.num_classes  # 初始均匀
-            probs[i] = self.alpha_bar[t]  # 让原类别 i 以 α_bar_t 的概率保留
-            probs /= probs.sum()  # 归一化
-            Q_t[i] = probs
-        return Q_t  # 形状：(num_classes, num_classes)
+    def forward(self, x, y_t, t):
+        """前向传播：输入图像x、加噪标签y_t和时间步t，输出类别概率"""
+        cond = self.encoder(x)  # (batch_size, 256)
+        t_emb = self.time_emb(t)  # (batch_size, 128)
+        y_t = y_t.view(y_t.size(0), -1)  # 确保y_t是(batch_size, num_classes)
+        input_features = torch.cat([y_t, t_emb, cond], dim=1)  # (batch_size, 10 + 128 + 256)
+        return self.mlp(input_features)  # (batch_size, num_classes)
 
     def forward_process(self, y_0, t):
-        """前向扩散过程：使用 Q_t 生成 y_t"""
-        Q_t = self.generate_transition_matrix(t)  # 生成类别转移矩阵
-        y_t = torch.matmul(y_0, Q_t)  # (batch_size, num_classes) x (num_classes, num_classes)
-        return y_t
-
-    def forward(self, x, y_t, t):
-        """预测 p(y_{t-1} | y_t, x)"""
-        cond = self.encoder(x)  # 提取图像特征 (batch_size, 256)
-        t_emb = self.time_emb(t)  # 时间步嵌入 (batch_size, 128)
-        input_features = torch.cat([y_t, t_emb, cond], dim=1)  # 组合输入 (batch_size, num_classes + 128 + 256)
-        pred_transition = self.mlp(input_features)  # 预测类别转换
-        pred_probs = F.softmax(pred_transition, dim=-1)  # 归一化，得到类别分布
-        return pred_probs  # 输出 (batch_size, num_classes)
+        """前向扩散过程：将原始标签y_0加噪到时间步t"""
+        alpha_bar_t = self.alpha_bar[t].view(-1, 1)  # (batch_size, 1)
+        uniform = torch.ones_like(y_0, device=self.device) / self.num_classes
+        return alpha_bar_t * y_0 + (1 - alpha_bar_t) * uniform
 
     def loss(self, x, y):
-        """KL 散度损失：p(y_{t-1} | y_t, x) 逼近真实的 q(y_{t-1} | y_0)"""
-        t = torch.randint(1, self.T, (x.size(0),), device=self.device)  # 随机时间步
-        y_0_onehot = F.one_hot(y, self.num_classes).float()  # one-hot 编码 y_0
-        y_t = self.forward_process(y_0_onehot, t)  # 生成 y_t
-        y_t_minus1 = self.forward_process(y_0_onehot, t - 1)  # 生成 y_{t-1}
-        
-        pred_y_t_minus1 = self(x, y_t, t)  # 预测 y_{t-1} 的分布
-        return F.kl_div(pred_y_t_minus1.log(), y_t_minus1, reduction="batchmean")  # KL 散度损失
-
+        """损失函数：计算预测类别与真实类别之间的交叉熵损失"""
+        t = torch.randint(0, self.T, (x.size(0),), device=self.device)
+        y_0_onehot = F.one_hot(y, self.num_classes).float()
+        y_t = self.forward_process(y_0_onehot, t)
+        pred_y0 = self(x, y_t, t)
+        return F.cross_entropy(pred_y0, y)
 
 def main():
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
