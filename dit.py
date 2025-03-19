@@ -408,6 +408,36 @@ class DiT_Llama(nn.Module):
         freqs = torch.outer(t, freqs).float()
         freqs_cis = torch.polar(torch.ones_like(freqs), freqs)
         return freqs_cis
+    
+    def get_feature(self, x, t, y):
+        """
+        从最后一个 Transformer 块提取特征
+        参数:
+            x: 输入张量 (batch_size, channels, height, width)，通常是离散化的 x_cat
+            t: 时间步张量 (batch_size,)
+            y: 条件标签张量 (batch_size,)
+        返回:
+            特征张量 (batch_size, dim)，从最后一个 Transformer 块的输出池化得到
+        """
+        self.freqs_cis = self.freqs_cis.to(x.device)
+
+        # 前向传播到 Transformer 块
+        x = (2 * x.float() / (self.N - 1)) - 1.0  # 与 forward 一致的预处理
+        x = self.init_conv_seq(x)
+        x = self.patchify(x)
+        x = self.x_embedder(x)
+
+        t = self.t_embedder(t)
+        y = self.y_embedder(y, self.training)
+        adaln_input = t + y
+
+        # 通过所有 Transformer 块
+        for layer in self.layers:
+            x = layer(x, self.freqs_cis[: x.size(1)], adaln_input=adaln_input)
+
+        # 对补丁维度取平均池化，得到 (batch_size, dim)
+        features = x.mean(dim=1)
+        return features
 
 
 def DiT_Llama_600M_patch2(**kwargs):
