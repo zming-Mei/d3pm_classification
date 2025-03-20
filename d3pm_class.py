@@ -51,13 +51,13 @@ class LabelDiffusion(nn.Module):
         self.register_buffer('beta', torch.linspace(0.0001, 0.02, T, device=device))
         self.register_buffer('alpha', 1. - self.beta)
         self.register_buffer('alpha_bar', torch.cumprod(self.alpha, dim=0))
+        
         # 使用 ResNet-50 作为图像特征编码器
         resnet50 = models.resnet50(pretrained=True)  
-
         self.encoder = nn.Sequential(
             *list(resnet50.children())[:-1],  # 移除最后的全连接层
-            nn.Flatten(),                   # 展平操作
-            nn.Linear(2048, 256),           # 添加一个线性层，将特征维度从 2048 映射到 256
+            nn.Flatten(),                   
+            nn.Linear(2048, 256),           
             nn.ReLU(),
             nn.Dropout(0.5)
         ).to(device)
@@ -95,35 +95,25 @@ class LabelDiffusion(nn.Module):
         ).to(device)
 
     def forward(self, x, y_t, t):
-        """前向传播：输入图像x、加噪标签y_t和时间步t，输出类别概率"""
+        #输入图像x、加噪标签y_t和时间步t，输出类别概率
         cond = self.encoder(x)  # (batch_size, 256)
-        t_emb = self.time_embedder(t)  # 使用 TimestepEmbedder 生成时间步嵌入
-        y_t = y_t.view(y_t.size(0), -1)  # 确保y_t是(batch_size, num_classes)
-        input_features = torch.cat([y_t, t_emb, cond], dim=1)  # (batch_size, 10 + 128 + 256)
-        return self.mlp(input_features)  # (batch_size, num_classes)
+        t_emb = self.time_embedder(t)  
+        y_t = y_t.view(y_t.size(0), -1) 
+        input_features = torch.cat([y_t, t_emb, cond], dim=1)
+        return self.mlp(input_features) 
     
 
-    #均匀分布
+    #前向加噪
     def forward_process(self, y_0, t):
-        """前向扩散过程：将原始标签y_0加噪到时间步t"""
         alpha_bar_t = self.alpha_bar[t].view(-1, 1)  # (batch_size, 1)
         uniform = torch.ones_like(y_0, device=self.device) / self.num_classes
         return alpha_bar_t * y_0 + (1 - alpha_bar_t) * uniform
-    #高斯噪声
+
     # def forward_process(self, y_0, t):
-    #     """前向扩散过程：将原始标签y_0加噪到时间步t"""
-    #     alpha_bar_t = self.alpha_bar[t].view(-1, 1)  # (batch_size, 1)
+    #     alpha_bar_t = self.alpha_bar[t].view(-1, 1) 
     #     # 高斯噪声
     #     noise = torch.randn_like(y_0, device=self.device)
-    #     noise = F.softmax(noise, dim=1)  # 归一化为概率分布
     #     return alpha_bar_t * y_0 + (1 - alpha_bar_t) * noise
-    # def loss(self, x, y):
-    #     #交叉熵损失
-    #     t = torch.randint(0, self.T, (x.size(0),), device=self.device)
-    #     y_0_onehot = F.one_hot(y, self.num_classes).float()
-    #     y_t = self.forward_process(y_0_onehot, t)
-    #     pred_y0 = self(x, y_t, t)
-    #     return F.cross_entropy(pred_y0, y)
     
     def loss(self, x, y):
         # 随机采样时间步
@@ -131,12 +121,16 @@ class LabelDiffusion(nn.Module):
         y_0_onehot = F.one_hot(y, self.num_classes).float()
         y_t = self.forward_process(y_0_onehot, t)
         pred_y0 = self(x, y_t, t)
-        # 交叉熵损失
+        
+        # Cross-Entropy Loss
         ce_loss = F.cross_entropy(pred_y0, y)
-        # KL 散度损失
-        kl_loss = F.kl_div(F.log_softmax(pred_y0, dim=1), y_0_onehot, reduction='batchmean')
+        
+        # KL Loss
+        pred_log_prob = torch.clamp(F.log_softmax(pred_y0, dim=1), min=-1e9)
+        kl_loss = F.kl_div(pred_log_prob, y_0_onehot, reduction='batchmean')
+        
         # 总损失
-        total_loss = ce_loss + 0.1 * kl_loss  
+        total_loss = ce_loss + 0.1 * kl_loss
         return total_loss
 
 
@@ -144,46 +138,38 @@ def main():
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     wandb.init(project="d3pm_cifar10_classification")
     
-    # 初始化模型
     model = LabelDiffusion(num_classes=10, T=1000, device=device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=100)
     
-    # 数据预处理
     transform = transforms.Compose([
         transforms.RandomHorizontalFlip(),
         transforms.ToTensor(),
         transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
     ])
     
-    # 加载数据集
     train_dataset = CIFAR10("./data", train=True, download=True, transform=transform)
     train_loader = DataLoader(train_dataset, batch_size=128, shuffle=True, num_workers=8)
-    
     test_dataset = CIFAR10("./data", train=False, transform=transform)
     test_loader = DataLoader(test_dataset, batch_size=128)
 
-    # 训练循环
-    for epoch in range(100):
+    for epoch in range(500):
         model.train()
         pbar = tqdm(train_loader)
         for x, y in pbar:
             x, y = x.to(device), y.to(device)
             
-            # 计算损失并优化
             loss = model.loss(x, y)
             optimizer.zero_grad()
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
             
-            # 日志记录
             wandb.log({"train_loss": loss.item()})
             pbar.set_description(f"Epoch {epoch} | Loss: {loss.item():.4f}")
         
         scheduler.step()
-        
-        # 验证阶段
+
         model.eval()
         correct = 0
         total = 0
