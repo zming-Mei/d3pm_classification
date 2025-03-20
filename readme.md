@@ -4,33 +4,25 @@
 </p>
 
 
-# Minimal Implementation of a D3PM (Structured Denoising Diffusion Models in Discrete State-Spaces), in pytorch
+# D3PM CIFAR10 classification in pytorch  (based on Minimal Implementation of a D3PM)
+
+ The loss function utilized is a combination of cross-entropy loss and KL divergence loss.
+- Add noise to and denoise the classes of CIFAR-10, using ResNet50 backboen to extract image features as conditional inputs for denoising and generating labels.
+
+- The time step \( t \) is a discrete integer, but a smooth and continuous representation is generated through frequency embedding (using sine and cosine functions), gradually transforming the labels from \( y_0 \) (one-hot) to \( y_T \) (uniform distribution).
 
 
-<p align="center">
-  <img src="contents/best.gif" alt="small" width="400">
-  <img src="contents/best.png" alt="small" width="400">
-</p>
-
-
-**Special thanks to [fal.ai](https://fal.ai/) for the compute resources for this project.**
-
-
-This is minimal (400 LOC), but fully faithful implementation of a D3PM [Structured Denoising Diffusion Models in Discrete State-Spaces](https://arxiv.org/abs/2107.03006). in pytorch.
-
-I have tried to keep the code as simple as possible with much comments and explanation that is somewhat lacking on the original jax implementation, so that it is easy to understand. As far as I know, this is the first, faithful reimplementation of D3PM in pytorch. (Please correct me if I am wrong). Of course, this implementation was heavily based on the [official implementation](https://github.com/google-research/google-research/tree/master/d3pm/images).
-
-Difference between this implementation and the official implementation:
-
-* This one has conditional sampling, so as you can see, generations are class-conditioned.
-* This one uses rather different/simple model architecture.
-* This one simplfies the official implementation very very much, so it is 400 LOC.
-* This one does not use truncated logistic reparameterization, but you can use that if you wish.
-* Only has uniform sample with inverse-linear beta scheudule, but you can change that with couple loc as well.
+- The loss function utilized is a combination of cross-entropy loss and KL divergence loss.
 
 ## Usage
 
 
+CIFAR10 classification in pytorch
+```bash
+python d3pm_class.py
+```
+
+These are the codes for generating images from the original post(Minimal Implementation of a D3PM)
 Following is completely self-contained example.
 
 ```bash
